@@ -30,10 +30,11 @@ test("server-renders the Castle Knockout playable surface", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Castle Knockout — Playable H5 Demo<\/title>/i);
-  assert.match(html, /aria-label="Castle Knockout playable demo"/i);
+  assert.match(html, /aria-label="Castle Knockout color-match playable demo"/i);
   assert.match(html, /<canvas[^>]*width="430"[^>]*height="760"/i);
-  assert.match(html, /PRESS &amp; HOLD/i);
-  assert.match(html, /7 shots remaining/i);
+  assert.match(html, /HOLD FOR DEPTH/i);
+  assert.match(html, /6 shots remaining/i);
+  assert.match(html, /CLEAR THE CASTLE/i);
   assert.match(html, /og:image[^>]*content="http:\/\/localhost:3000\/og\.png"/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -51,16 +52,22 @@ test("ships the gameplay, CTA, and original art assets", async () => {
   assert.doesNotMatch(page, /onPointerMove|aimX|aimY/);
   assert.match(page, /chargeStarted/);
   assert.match(page, /Math\.sin\(Math\.PI \* ball\.progress\)/);
-  assert.match(page, /515 - power \* 275/);
-  assert.match(page, /DEPTH HIT/);
-  assert.match(page, /TOTAL BREACH!/);
+  assert.match(page, /depthToY/);
+  assert.match(page, /clusterId/);
+  assert.match(page, /scheduleUnsupported/);
+  assert.match(page, /COLOR CORES/);
+  assert.match(page, /CHALLENGE_STARTED/);
+  assert.match(page, /CHALLENGE_PASS_75/);
+  assert.match(page, /CHALLENGE_SOLVED/);
+  assert.match(page, /CLICK_CTA/);
   assert.match(page, /brick\.z \+= brick\.vz/);
-  assert.match(page, /500 \/ \(500 \+ brick\.z\)/);
+  assert.match(page, /560 \/ \(560 \+ Math\.max\(0, z\)\)/);
   assert.match(layout, /openGraph:/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
   await Promise.all([
     access(new URL("../public/castle-arena.png", import.meta.url)),
     access(new URL("../public/og.png", import.meta.url)),
+    access(new URL("../docs/Castle_Knockout_H5_试玩需求文档_PRD.md", import.meta.url)),
   ]);
 });

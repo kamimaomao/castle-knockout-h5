@@ -6,14 +6,14 @@ const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").re
 export const metadata: Metadata = {
   metadataBase: new URL(`${siteUrl}/`),
   title: "Castle Knockout — Playable H5 Demo",
-  description: "Aim, fire, and bring the castle down in this playful physics puzzle demo.",
+  description: "Hold for Z-depth, match the color, and chain-collapse a giant brick castle.",
   icons: {
     icon: `${siteUrl}/favicon.svg`,
     shortcut: `${siteUrl}/favicon.svg`,
   },
   openGraph: {
     title: "Castle Knockout — Playable H5 Demo",
-    description: "Aim, fire, and bring the castle down.",
+    description: "Hold for Z-depth, match the color, and chain-collapse the castle.",
     type: "website",
     url: siteUrl,
     images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: "Castle Knockout game preview" }],
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Castle Knockout — Playable H5 Demo",
-    description: "Aim, fire, and bring the castle down.",
+    description: "Hold for Z-depth, match the color, and chain-collapse the castle.",
     images: [`${siteUrl}/og.png`],
   },
 };

@@ -31,7 +31,7 @@ function rewriteForPages(source) {
 }
 
 const html = rewriteForPages(await response.text());
-if (!html.includes("Castle Knockout playable demo")) throw new Error("Playable surface missing from static output");
+if (!html.includes("Castle Knockout color-match playable demo")) throw new Error("Playable surface missing from static output");
 if (basePath !== "/" && !html.includes(`${basePath}assets/`)) throw new Error("GitHub Pages asset base was not applied");
 
 await writeFile(new URL("index.html", outputRoot), html);
