@@ -4,24 +4,34 @@ import { PointerEvent, useCallback, useEffect, useRef, useState } from "react";
 
 const WORLD_W = 430;
 const WORLD_H = 760;
-const PLATFORM_Y = 522;
+const SHOT_COUNT = 7;
+const VANISH_X = 215;
+const VANISH_Y = 248;
 const DOWNLOAD_URL = "https://www.taptap.cn/moment/791302421241397589";
 
-type BlockKind = "stone" | "ruby" | "sapphire" | "gold";
+type BrickKind = "stone" | "blue" | "red" | "gold";
 
-type Block = {
+type Brick = {
   id: number;
   x: number;
   y: number;
+  z: number;
   w: number;
   h: number;
-  angle: number;
   vx: number;
   vy: number;
-  va: number;
-  kind: BlockKind;
+  vz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  vrx: number;
+  vry: number;
+  vrz: number;
+  kind: BrickKind;
+  attached: boolean;
   cleared: boolean;
-  hitFlash: number;
+  crack: number;
+  flash: number;
 };
 
 type Ball = {
@@ -30,7 +40,6 @@ type Ball = {
   vx: number;
   vy: number;
   radius: number;
-  active: boolean;
   age: number;
   trail: { x: number; y: number; life: number }[];
 };
@@ -38,58 +47,131 @@ type Ball = {
 type Particle = {
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
+  vz: number;
   life: number;
   size: number;
   color: string;
-  shape: "spark" | "dust";
+  spark: boolean;
 };
 
-type GameRuntime = {
-  blocks: Block[];
+type Shockwave = {
+  x: number;
+  y: number;
+  radius: number;
+  life: number;
+};
+
+type Runtime = {
+  bricks: Brick[];
+  initialBricks: number;
   ball: Ball | null;
   particles: Particle[];
+  shockwaves: Shockwave[];
+  craters: { x: number; y: number; radius: number; alpha: number }[];
   aiming: boolean;
   aimX: number;
   aimY: number;
   shots: number;
-  physicsLive: boolean;
-  combo: number;
-  lastHitAt: number;
-  ended: boolean;
+  shotCooldown: number;
+  shake: number;
+  punch: number;
+  impactCount: number;
+  victoryTimer: number;
+  outTimer: number;
+  locked: boolean;
 };
 
-const palettes: Record<BlockKind, { face: string; edge: string; light: string }> = {
-  stone: { face: "#8b93a5", edge: "#4e566b", light: "#c6ccda" },
-  ruby: { face: "#e64b3f", edge: "#8b292c", light: "#ff8b63" },
-  sapphire: { face: "#3285df", edge: "#174a9a", light: "#75c4ff" },
-  gold: { face: "#ffc43d", edge: "#a96713", light: "#fff18b" },
+const colors: Record<BrickKind, { light: string; face: string; edge: string; deep: string }> = {
+  stone: { light: "#e4e8ee", face: "#9ca6b8", edge: "#667086", deep: "#434c62" },
+  blue: { light: "#9be0ff", face: "#3489df", edge: "#1d56a9", deep: "#143a77" },
+  red: { light: "#ff9a76", face: "#e94b3e", edge: "#a92c32", deep: "#701e2b" },
+  gold: { light: "#fff19c", face: "#ffc53d", edge: "#c27416", deep: "#81400e" },
 };
 
-function createLevel(): Block[] {
-  return [
-    { id: 1, x: 116, y: 478, w: 46, h: 86, angle: 0, vx: 0, vy: 0, va: 0, kind: "sapphire", cleared: false, hitFlash: 0 },
-    { id: 2, x: 314, y: 478, w: 46, h: 86, angle: 0, vx: 0, vy: 0, va: 0, kind: "sapphire", cleared: false, hitFlash: 0 },
-    { id: 3, x: 215, y: 446, w: 172, h: 32, angle: 0, vx: 0, vy: 0, va: 0, kind: "ruby", cleared: false, hitFlash: 0 },
-    { id: 4, x: 165, y: 392, w: 39, h: 78, angle: 0, vx: 0, vy: 0, va: 0, kind: "stone", cleared: false, hitFlash: 0 },
-    { id: 5, x: 265, y: 392, w: 39, h: 78, angle: 0, vx: 0, vy: 0, va: 0, kind: "stone", cleared: false, hitFlash: 0 },
-    { id: 6, x: 215, y: 344, w: 154, h: 30, angle: 0, vx: 0, vy: 0, va: 0, kind: "ruby", cleared: false, hitFlash: 0 },
-    { id: 7, x: 215, y: 293, w: 62, h: 72, angle: 0, vx: 0, vy: 0, va: 0, kind: "gold", cleared: false, hitFlash: 0 },
-    { id: 8, x: 139, y: 310, w: 34, h: 58, angle: 0, vx: 0, vy: 0, va: 0, kind: "sapphire", cleared: false, hitFlash: 0 },
-    { id: 9, x: 291, y: 310, w: 34, h: 58, angle: 0, vx: 0, vy: 0, va: 0, kind: "sapphire", cleared: false, hitFlash: 0 },
-  ];
+function createCastle() {
+  const bricks: Brick[] = [];
+  let id = 0;
+  const add = (x: number, y: number, w: number, h: number, kind: BrickKind, crack = 0) => {
+    bricks.push({
+      id: id++, x, y, z: 0, w, h,
+      vx: 0, vy: 0, vz: 0,
+      rx: 0, ry: 0, rz: 0,
+      vrx: 0, vry: 0, vrz: 0,
+      kind, attached: true, cleared: false, crack, flash: 0,
+    });
+  };
+
+  const addTower = (centerX: number, rows: number, mirror = false) => {
+    for (let row = 0; row < rows; row += 1) {
+      const offset = row % 2 === 0 ? 0 : 2;
+      for (let col = 0; col < 3; col += 1) {
+        const x = centerX + (col - 1) * 29 + offset;
+        const y = 515 - row * 21;
+        let kind: BrickKind = "stone";
+        if (row === 5 && col === (mirror ? 0 : 2)) kind = "red";
+        if (row === 8 && col === 1) kind = "blue";
+        add(x, y, 27, 19, kind, (row + col) % 7 === 0 ? 1 : 0);
+      }
+    }
+    for (const col of [-1, 1]) add(centerX + col * 29, 294, 27, 25, "stone");
+    add(centerX, 305, 27, 19, "gold");
+  };
+
+  for (let row = 0; row < 13; row += 1) {
+    const offset = row % 2 === 0 ? 0 : 2;
+    for (let col = 0; col < 6; col += 1) {
+      if (row < 3 && (col === 2 || col === 3)) continue;
+      const x = 127 + col * 35 + offset;
+      const y = 515 - row * 21;
+      let kind: BrickKind = "stone";
+      if (row === 4 && (col === 2 || col === 3)) kind = "red";
+      if (row === 8 && (col === 0 || col === 5)) kind = "blue";
+      if (row === 10 && (col === 2 || col === 3)) kind = "gold";
+      add(x, y, 33, 19, kind, (row * 3 + col) % 11 === 0 ? 1 : 0);
+    }
+  }
+
+  addTower(69, 10);
+  addTower(361, 10, true);
+
+  for (const col of [0, 2, 3, 5]) add(127 + col * 35, 248, 33, 26, col === 2 || col === 3 ? "gold" : "stone");
+  add(215, 221, 54, 28, "gold");
+  return bricks;
+}
+
+function createRuntime(): Runtime {
+  const bricks = createCastle();
+  return {
+    bricks,
+    initialBricks: bricks.length,
+    ball: null,
+    particles: [],
+    shockwaves: [],
+    craters: [],
+    aiming: false,
+    aimX: 215,
+    aimY: 360,
+    shots: SHOT_COUNT,
+    shotCooldown: 0,
+    shake: 0,
+    punch: 0,
+    impactCount: 0,
+    victoryTimer: 0,
+    outTimer: 0,
+    locked: false,
+  };
 }
 
 function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  const radius = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
-  ctx.roundRect(x, y, w, h, radius);
+  ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2));
 }
 
-function drawCrown(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1) {
+function drawCrown(ctx: CanvasRenderingContext2D, scale = 1) {
   ctx.save();
-  ctx.translate(x, y);
   ctx.scale(scale, scale);
   ctx.beginPath();
   ctx.moveTo(-16, 7);
@@ -100,229 +182,231 @@ function drawCrown(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 
   ctx.lineTo(20, -9);
   ctx.lineTo(16, 7);
   ctx.closePath();
-  ctx.fillStyle = "#ffe358";
+  ctx.fillStyle = "#fff278";
   ctx.fill();
   ctx.lineWidth = 3;
-  ctx.strokeStyle = "#9e5c0d";
+  ctx.strokeStyle = "#8b4e0e";
   ctx.stroke();
-  ctx.fillStyle = "#fff6ad";
-  ctx.fillRect(-14, 1, 28, 3);
   ctx.restore();
 }
 
-function drawBlock(ctx: CanvasRenderingContext2D, block: Block) {
-  const palette = palettes[block.kind];
+function project(brick: Brick) {
+  const scale = 500 / (500 + brick.z);
+  return {
+    x: VANISH_X + (brick.x - VANISH_X) * scale,
+    y: VANISH_Y + (brick.y - VANISH_Y) * scale,
+    scale,
+  };
+}
+
+function drawBrick(ctx: CanvasRenderingContext2D, brick: Brick) {
+  const palette = colors[brick.kind];
+  const p = project(brick);
+  const flipX = 0.88 + Math.abs(Math.cos(brick.ry)) * 0.12;
+  const flipY = 0.84 + Math.abs(Math.cos(brick.rx)) * 0.16;
+  const depth = 5 + Math.abs(Math.sin(brick.ry)) * 9;
+  const opacity = Math.max(0.18, 1 - brick.z / 930);
+
   ctx.save();
-  ctx.translate(block.x, block.y);
-  ctx.rotate(block.angle);
-  ctx.shadowColor = "rgba(37, 29, 44, .35)";
-  ctx.shadowBlur = 9;
-  ctx.shadowOffsetY = 7;
-  roundedRect(ctx, -block.w / 2, -block.h / 2, block.w, block.h, 7);
-  const gradient = ctx.createLinearGradient(-block.w / 2, -block.h / 2, block.w / 2, block.h / 2);
-  gradient.addColorStop(0, block.hitFlash > 0 ? "#fff7d5" : palette.light);
-  gradient.addColorStop(0.28, palette.face);
+  ctx.globalAlpha = opacity;
+  ctx.translate(p.x, p.y);
+  ctx.rotate(brick.rz);
+  ctx.scale(p.scale * flipX, p.scale * flipY);
+
+  ctx.shadowColor = brick.attached ? "rgba(32, 39, 58, .28)" : "rgba(20, 35, 70, .5)";
+  ctx.shadowBlur = brick.attached ? 3 : 9;
+  ctx.shadowOffsetY = brick.attached ? 2 : 7;
+
+  ctx.fillStyle = palette.deep;
+  ctx.beginPath();
+  ctx.moveTo(brick.w / 2, -brick.h / 2);
+  ctx.lineTo(brick.w / 2 + depth, -brick.h / 2 - depth * 0.55);
+  ctx.lineTo(brick.w / 2 + depth, brick.h / 2 - depth * 0.55);
+  ctx.lineTo(brick.w / 2, brick.h / 2);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = palette.light;
+  ctx.beginPath();
+  ctx.moveTo(-brick.w / 2, -brick.h / 2);
+  ctx.lineTo(-brick.w / 2 + depth, -brick.h / 2 - depth * 0.55);
+  ctx.lineTo(brick.w / 2 + depth, -brick.h / 2 - depth * 0.55);
+  ctx.lineTo(brick.w / 2, -brick.h / 2);
+  ctx.closePath();
+  ctx.fill();
+
+  roundedRect(ctx, -brick.w / 2, -brick.h / 2, brick.w, brick.h, 4);
+  const gradient = ctx.createLinearGradient(-brick.w / 2, -brick.h / 2, brick.w / 2, brick.h / 2);
+  gradient.addColorStop(0, brick.flash > 0 ? "#fffce0" : palette.light);
+  gradient.addColorStop(0.32, palette.face);
   gradient.addColorStop(1, palette.edge);
   ctx.fillStyle = gradient;
   ctx.fill();
   ctx.shadowColor = "transparent";
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = palette.edge;
+  ctx.lineWidth = 1.7;
+  ctx.strokeStyle = palette.deep;
   ctx.stroke();
 
-  ctx.globalAlpha = 0.7;
-  ctx.fillStyle = palette.light;
-  roundedRect(ctx, -block.w / 2 + 5, -block.h / 2 + 5, block.w - 10, Math.min(7, block.h / 5), 4);
+  ctx.globalAlpha = opacity * 0.62;
+  ctx.fillStyle = "#fff";
+  roundedRect(ctx, -brick.w / 2 + 3, -brick.h / 2 + 3, brick.w * 0.44, 3, 2);
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = opacity;
 
-  if (block.kind === "stone") {
-    ctx.strokeStyle = "rgba(63, 72, 92, .42)";
-    ctx.lineWidth = 2;
-    for (let y = -block.h / 2 + 22; y < block.h / 2; y += 22) {
-      ctx.beginPath();
-      ctx.moveTo(-block.w / 2 + 3, y);
-      ctx.lineTo(block.w / 2 - 3, y);
-      ctx.stroke();
-    }
-  }
-
-  if (block.kind === "gold") {
-    drawCrown(ctx, 0, 4, 0.72);
-  } else {
-    ctx.fillStyle = "rgba(255,255,255,.3)";
+  if (brick.crack > 0) {
+    ctx.strokeStyle = "rgba(48, 48, 59, .62)";
+    ctx.lineWidth = 1.2 + brick.crack * 0.35;
     ctx.beginPath();
-    ctx.arc(-block.w * 0.18, -block.h * 0.12, Math.max(3, Math.min(block.w, block.h) * 0.09), 0, Math.PI * 2);
+    ctx.moveTo(-2, -brick.h / 2 + 1);
+    ctx.lineTo(2, -2);
+    ctx.lineTo(-4, 3);
+    ctx.lineTo(3, brick.h / 2 - 1);
+    ctx.stroke();
+  }
+  if (brick.kind === "gold" && brick.w > 45) drawCrown(ctx, 0.55);
+  ctx.restore();
+}
+
+function drawCastleBacking(ctx: CanvasRenderingContext2D) {
+  ctx.save();
+  ctx.shadowColor = "rgba(24, 33, 57, .42)";
+  ctx.shadowBlur = 22;
+  ctx.shadowOffsetY = 12;
+  ctx.fillStyle = "#4d5870";
+  roundedRect(ctx, 110, 258, 210, 284, 10);
+  ctx.fill();
+  roundedRect(ctx, 24, 304, 92, 238, 12);
+  ctx.fill();
+  roundedRect(ctx, 314, 304, 92, 238, 12);
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+
+  const door = ctx.createRadialGradient(215, 506, 5, 215, 506, 43);
+  door.addColorStop(0, "#14243d");
+  door.addColorStop(1, "#26344e");
+  ctx.fillStyle = door;
+  ctx.beginPath();
+  ctx.arc(215, 497, 35, Math.PI, 0);
+  ctx.lineTo(250, 541);
+  ctx.lineTo(180, 541);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(22, 38, 65, .9)";
+  for (const x of [69, 361]) {
+    ctx.beginPath();
+    ctx.arc(x, 395, 13, Math.PI, 0);
+    ctx.lineTo(x + 13, 426);
+    ctx.lineTo(x - 13, 426);
+    ctx.closePath();
     ctx.fill();
   }
   ctx.restore();
 }
 
-function drawPlatform(ctx: CanvasRenderingContext2D) {
+function drawBase(ctx: CanvasRenderingContext2D) {
   ctx.save();
-  ctx.shadowColor = "rgba(39, 30, 28, .4)";
-  ctx.shadowBlur = 10;
+  ctx.shadowColor = "rgba(38, 35, 42, .45)";
+  ctx.shadowBlur = 12;
   ctx.shadowOffsetY = 8;
-  roundedRect(ctx, 54, PLATFORM_Y, 322, 28, 9);
-  const gradient = ctx.createLinearGradient(0, PLATFORM_Y, 0, PLATFORM_Y + 28);
-  gradient.addColorStop(0, "#eef1f5");
-  gradient.addColorStop(0.32, "#aab2c1");
-  gradient.addColorStop(1, "#5c6374");
-  ctx.fillStyle = gradient;
+  roundedRect(ctx, 14, 536, 402, 30, 10);
+  const base = ctx.createLinearGradient(0, 536, 0, 566);
+  base.addColorStop(0, "#e3e7ef");
+  base.addColorStop(0.3, "#919bad");
+  base.addColorStop(1, "#525b70");
+  ctx.fillStyle = base;
   ctx.fill();
   ctx.shadowColor = "transparent";
+  ctx.strokeStyle = "#454d60";
   ctx.lineWidth = 3;
-  ctx.strokeStyle = "#51586a";
   ctx.stroke();
-  ctx.strokeStyle = "rgba(65,72,88,.48)";
-  ctx.lineWidth = 2;
-  for (let x = 88; x < 370; x += 54) {
-    ctx.beginPath();
-    ctx.moveTo(x, PLATFORM_Y + 3);
-    ctx.lineTo(x, PLATFORM_Y + 25);
-    ctx.stroke();
-  }
   ctx.restore();
 }
 
 function drawBall(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, glow = false) {
   ctx.save();
   ctx.translate(x, y);
-  if (glow) {
-    ctx.shadowColor = "rgba(255, 225, 80, .9)";
-    ctx.shadowBlur = 20;
-  } else {
-    ctx.shadowColor = "rgba(19, 37, 84, .5)";
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetY = 5;
-  }
-  const gradient = ctx.createRadialGradient(-radius * 0.34, -radius * 0.4, radius * 0.1, 0, 0, radius);
-  gradient.addColorStop(0, "#dff6ff");
-  gradient.addColorStop(0.22, "#58b8ff");
-  gradient.addColorStop(0.7, "#1764c8");
-  gradient.addColorStop(1, "#0b347d");
+  ctx.shadowColor = glow ? "rgba(255, 225, 80, .95)" : "rgba(15, 34, 80, .55)";
+  ctx.shadowBlur = glow ? 22 : 10;
+  ctx.shadowOffsetY = glow ? 0 : 6;
+  const gradient = ctx.createRadialGradient(-radius * 0.38, -radius * 0.42, 1, 0, 0, radius);
+  gradient.addColorStop(0, "#e8fbff");
+  gradient.addColorStop(0.18, "#68c7ff");
+  gradient.addColorStop(0.62, "#1768cc");
+  gradient.addColorStop(1, "#092f75");
   ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(0, 0, radius, 0, Math.PI * 2);
   ctx.fill();
   ctx.shadowColor = "transparent";
-  ctx.lineWidth = Math.max(2, radius * 0.14);
-  ctx.strokeStyle = "#f5c740";
+  ctx.strokeStyle = "#ffd64f";
+  ctx.lineWidth = Math.max(2, radius * 0.13);
   ctx.beginPath();
-  ctx.arc(0, 0, radius * 0.72, -0.9, 1.9);
+  ctx.arc(0, 0, radius * 0.7, -1, 1.85);
   ctx.stroke();
+  drawCrown(ctx, radius / 48);
   ctx.restore();
 }
 
-function spawnImpact(runtime: GameRuntime, x: number, y: number, color: string, amount = 9) {
+function spawnParticles(runtime: Runtime, x: number, y: number, amount: number) {
+  const palette = ["#fff19a", "#ffbf32", "#f15743", "#58b8ff", "#d8dde7", "#ffffff"];
   for (let i = 0; i < amount; i += 1) {
-    const angle = (Math.PI * 2 * i) / amount + Math.random() * 0.45;
-    const speed = 1.5 + Math.random() * 3.5;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2.5 + Math.random() * 8;
     runtime.particles.push({
       x,
       y,
+      z: 0,
       vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 1,
-      life: 0.7 + Math.random() * 0.45,
-      size: 2.5 + Math.random() * 4,
-      color,
-      shape: i % 3 === 0 ? "spark" : "dust",
+      vy: Math.sin(angle) * speed - 2,
+      vz: 2 + Math.random() * 8,
+      life: 0.65 + Math.random() * 0.9,
+      size: 1.5 + Math.random() * 5.5,
+      color: palette[Math.floor(Math.random() * palette.length)],
+      spark: i % 3 === 0,
     });
   }
 }
 
-function resolveBlocks(a: Block, b: Block) {
-  if (a.cleared || b.cleared) return;
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const overlapX = (a.w + b.w) / 2 - Math.abs(dx);
-  const overlapY = (a.h + b.h) / 2 - Math.abs(dy);
-  if (overlapX <= 0 || overlapY <= 0) return;
-
-  if (overlapX < overlapY) {
-    const sign = dx >= 0 ? 1 : -1;
-    a.x -= sign * overlapX * 0.5;
-    b.x += sign * overlapX * 0.5;
-    const avg = (a.vx + b.vx) * 0.5;
-    a.vx = avg - sign * 0.12;
-    b.vx = avg + sign * 0.12;
-  } else {
-    const sign = dy >= 0 ? 1 : -1;
-    a.y -= sign * overlapY * 0.52;
-    b.y += sign * overlapY * 0.52;
-    const avg = (a.vy + b.vy) * 0.5;
-    a.vy = avg - sign * 0.1;
-    b.vy = avg + sign * 0.1;
-    a.vx *= 0.98;
-    b.vx *= 0.98;
-  }
-}
-
-function hitBallAgainstBlock(ball: Ball, block: Block, runtime: GameRuntime) {
-  if (block.cleared) return false;
-  const closestX = Math.max(block.x - block.w / 2, Math.min(ball.x, block.x + block.w / 2));
-  const closestY = Math.max(block.y - block.h / 2, Math.min(ball.y, block.y + block.h / 2));
-  const dx = ball.x - closestX;
-  const dy = ball.y - closestY;
-  const distSq = dx * dx + dy * dy;
-  if (distSq > ball.radius * ball.radius) return false;
-
-  const dist = Math.max(0.01, Math.sqrt(distSq));
-  const nx = dist > 0.05 ? dx / dist : ball.x < block.x ? -1 : 1;
-  const ny = dist > 0.05 ? dy / dist : -1;
-  const dot = ball.vx * nx + ball.vy * ny;
-  ball.vx -= 1.65 * dot * nx;
-  ball.vy -= 1.65 * dot * ny;
-  ball.vx *= 0.78;
-  ball.vy *= 0.78;
-  ball.x = closestX + nx * (ball.radius + 2);
-  ball.y = closestY + ny * (ball.radius + 2);
-
-  block.vx += -nx * 3.1 + ball.vx * 0.15;
-  block.vy += -ny * 2.6 + ball.vy * 0.08;
-  block.va += (ball.x - block.x) * 0.0017 + (Math.random() - 0.5) * 0.035;
-  block.hitFlash = 0.16;
-  runtime.combo = performance.now() - runtime.lastHitAt < 650 ? runtime.combo + 1 : 1;
-  runtime.lastHitAt = performance.now();
-  spawnImpact(runtime, closestX, closestY, palettes[block.kind].light, runtime.combo > 2 ? 14 : 8);
-  return true;
+function detachBrick(brick: Brick, hitX: number, hitY: number, strength: number, finalBurst = false) {
+  const dx = brick.x - hitX;
+  const dy = brick.y - hitY;
+  const length = Math.max(8, Math.hypot(dx, dy));
+  brick.attached = false;
+  brick.flash = 0.28;
+  brick.crack = 2;
+  brick.vx = (dx / length) * (2.5 + strength * 4.8) + (Math.random() - 0.5) * 2.8;
+  brick.vy = (dy / length) * (2 + strength * 4) - 2.8 - Math.random() * 4.5;
+  brick.vz = (finalBurst ? 5 : 8) + strength * 9 + Math.random() * 8;
+  brick.vrx = (Math.random() - 0.5) * 0.2;
+  brick.vry = (Math.random() - 0.5) * 0.25;
+  brick.vrz = (Math.random() - 0.5) * 0.16;
 }
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const runtimeRef = useRef<Runtime>(createRuntime());
   const soundRef = useRef(true);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const runtimeRef = useRef<GameRuntime>({
-    blocks: createLevel(),
-    ball: null,
-    particles: [],
-    aiming: false,
-    aimX: 215,
-    aimY: 350,
-    shots: 5,
-    physicsLive: false,
-    combo: 0,
-    lastHitAt: 0,
-    ended: false,
-  });
-
-  const [shots, setShots] = useState(5);
-  const [remaining, setRemaining] = useState(9);
+  const audioRef = useRef<AudioContext | null>(null);
+  const bannerTimerRef = useRef<number | null>(null);
+  const [shots, setShots] = useState(SHOT_COUNT);
+  const [damage, setDamage] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
-  const [showTutorial, setShowTutorial] = useState(true);
-  const [endState, setEndState] = useState<null | "victory" | "out">(null);
+  const [tutorial, setTutorial] = useState(true);
   const [impactLabel, setImpactLabel] = useState("");
+  const [endState, setEndState] = useState<null | "victory" | "out">(null);
 
   const playTone = useCallback((frequency: number, duration: number, type: OscillatorType = "sine", volume = 0.05) => {
     if (!soundRef.current || typeof window === "undefined") return;
     const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
-    const audio = audioContextRef.current ?? new AudioCtx();
-    audioContextRef.current = audio;
+    const audio = audioRef.current ?? new AudioCtx();
+    audioRef.current = audio;
     const oscillator = audio.createOscillator();
     const gain = audio.createGain();
     oscillator.type = type;
     oscillator.frequency.setValueAtTime(frequency, audio.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(40, frequency * 0.45), audio.currentTime + duration);
     gain.gain.setValueAtTime(volume, audio.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + duration);
     oscillator.connect(gain);
@@ -331,220 +415,275 @@ export default function Home() {
     oscillator.stop(audio.currentTime + duration);
   }, []);
 
-  const resetGame = useCallback(() => {
-    runtimeRef.current = {
-      blocks: createLevel(),
-      ball: null,
-      particles: [],
-      aiming: false,
-      aimX: 215,
-      aimY: 350,
-      shots: 5,
-      physicsLive: false,
-      combo: 0,
-      lastHitAt: 0,
-      ended: false,
-    };
-    setShots(5);
-    setRemaining(9);
-    setEndState(null);
-    setImpactLabel("");
-    setShowTutorial(false);
+  const showImpact = useCallback((label: string) => {
+    setImpactLabel(label);
+    if (bannerTimerRef.current) window.clearTimeout(bannerTimerRef.current);
+    bannerTimerRef.current = window.setTimeout(() => setImpactLabel(""), 820);
   }, []);
+
+  const resetGame = useCallback(() => {
+    runtimeRef.current = createRuntime();
+    setShots(SHOT_COUNT);
+    setDamage(0);
+    setTutorial(false);
+    setImpactLabel("");
+    setEndState(null);
+  }, []);
+
+  const blastAt = useCallback((hitX: number, hitY: number) => {
+    const runtime = runtimeRef.current;
+    const candidates = runtime.bricks
+      .filter((brick) => brick.attached && !brick.cleared)
+      .map((brick) => ({ brick, distance: Math.hypot(brick.x - hitX, brick.y - hitY) }))
+      .sort((a, b) => a.distance - b.distance);
+    if (!candidates.length) return;
+
+    runtime.impactCount += 1;
+    const take = Math.min(candidates.length, 19 + (runtime.impactCount % 3) * 2);
+    const selected = candidates.slice(0, take);
+    const furthest = Math.max(70, selected[selected.length - 1]?.distance ?? 70);
+    for (const { brick, distance } of selected) {
+      detachBrick(brick, hitX, hitY, Math.max(0.2, 1 - distance / (furthest + 18)));
+    }
+    for (const { brick, distance } of candidates.slice(take)) {
+      if (distance < furthest + 58) {
+        brick.crack = Math.min(2, brick.crack + 1);
+        brick.flash = 0.12;
+      }
+    }
+
+    runtime.craters.push({ x: hitX, y: hitY, radius: 38 + take * 0.55, alpha: 0.55 });
+    runtime.shockwaves.push({ x: hitX, y: hitY, radius: 8, life: 1 });
+    runtime.shake = 15;
+    runtime.punch = 1;
+    runtime.ball = null;
+    runtime.shotCooldown = 0.48;
+    spawnParticles(runtime, hitX, hitY, 62 + take);
+
+    const attached = runtime.bricks.filter((brick) => brick.attached).length;
+    const nextDamage = Math.min(100, Math.round((1 - attached / runtime.initialBricks) * 100));
+    setDamage(nextDamage);
+    showImpact(runtime.impactCount % 3 === 0 ? `ROYAL SMASH  +${take}` : `BRICKSTORM  +${take}`);
+    playTone(86, 0.28, "sawtooth", 0.09);
+    window.setTimeout(() => playTone(54, 0.22, "square", 0.045), 45);
+    if (navigator.vibrate) navigator.vibrate([28, 24, 55]);
+
+    if (attached <= 18 && runtime.victoryTimer <= 0) {
+      for (const brick of runtime.bricks.filter((item) => item.attached)) {
+        detachBrick(brick, 215, 395, 0.75 + Math.random() * 0.25, true);
+      }
+      runtime.locked = true;
+      runtime.victoryTimer = 1.45;
+      runtime.shake = 22;
+      spawnParticles(runtime, 215, 380, 120);
+      setDamage(100);
+      showImpact("TOTAL BREACH!");
+    } else if (runtime.shots === 0) {
+      runtime.outTimer = 1.8;
+    }
+  }, [playTone, showImpact]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    let frame = 0;
-    let lastTime = performance.now();
-    let noShotTimer = 0;
+    let raf = 0;
+    let previous = performance.now();
 
-    const render = (now: number) => {
-      const dt = Math.min(2, Math.max(0.5, (now - lastTime) / 16.667));
-      lastTime = now;
+    const frame = (now: number) => {
+      const dt = Math.min(2, Math.max(0.45, (now - previous) / 16.667));
+      previous = now;
       const runtime = runtimeRef.current;
+      runtime.shotCooldown = Math.max(0, runtime.shotCooldown - 0.0167 * dt);
+      runtime.shake *= Math.pow(0.79, dt);
+      runtime.punch *= Math.pow(0.77, dt);
 
-      if (runtime.physicsLive && !runtime.ended) {
-        const subSteps = 3;
-        for (let step = 0; step < subSteps; step += 1) {
-          const tick = dt / subSteps;
-          for (const block of runtime.blocks) {
-            if (block.cleared) continue;
-            block.vy += 0.22 * tick;
-            block.x += block.vx * tick;
-            block.y += block.vy * tick;
-            block.angle += block.va * tick;
-            block.vx *= Math.pow(0.995, tick);
-            block.va *= Math.pow(0.992, tick);
-            block.hitFlash = Math.max(0, block.hitFlash - 0.016 * tick);
+      for (const brick of runtime.bricks) {
+        brick.flash = Math.max(0, brick.flash - 0.025 * dt);
+        if (brick.attached || brick.cleared) continue;
+        brick.x += brick.vx * dt;
+        brick.y += brick.vy * dt;
+        brick.z += brick.vz * dt;
+        brick.vy += 0.18 * dt;
+        brick.vx *= Math.pow(0.993, dt);
+        brick.vz *= Math.pow(0.987, dt);
+        brick.rx += brick.vrx * dt;
+        brick.ry += brick.vry * dt;
+        brick.rz += brick.vrz * dt;
+        brick.vrx *= 0.996;
+        brick.vry *= 0.996;
+        brick.vrz *= 0.997;
+        if (brick.z > 800 || brick.y > 930) brick.cleared = true;
+      }
 
-            const halfW = Math.abs(Math.cos(block.angle)) * block.w / 2 + Math.abs(Math.sin(block.angle)) * block.h / 2;
-            const halfH = Math.abs(Math.sin(block.angle)) * block.w / 2 + Math.abs(Math.cos(block.angle)) * block.h / 2;
-            const onPlatform = block.x + halfW > 54 && block.x - halfW < 376;
-            if (onPlatform && block.y + halfH > PLATFORM_Y && block.y < PLATFORM_Y + 18 && block.vy > 0) {
-              block.y = PLATFORM_Y - halfH;
-              block.vy *= -0.18;
-              block.vx *= 0.92;
-              block.va *= 0.84;
-            }
-          }
+      if (runtime.ball) {
+        const ball = runtime.ball;
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
+        ball.age += 0.0167 * dt;
+        ball.trail.unshift({ x: ball.x, y: ball.y, life: 1 });
+        if (ball.trail.length > 12) ball.trail.pop();
+        ball.trail.forEach((point) => { point.life -= 0.11 * dt; });
 
-          for (let i = 0; i < runtime.blocks.length; i += 1) {
-            for (let j = i + 1; j < runtime.blocks.length; j += 1) {
-              resolveBlocks(runtime.blocks[i], runtime.blocks[j]);
-            }
-          }
-
-          if (runtime.ball?.active) {
-            const ball = runtime.ball;
-            ball.vy += 0.03 * tick;
-            ball.x += ball.vx * tick;
-            ball.y += ball.vy * tick;
-            ball.age += 0.016 * tick;
-            for (const block of runtime.blocks) {
-              if (hitBallAgainstBlock(ball, block, runtime)) {
-                playTone(180 + runtime.combo * 35, 0.09, "square", 0.035);
-                if (navigator.vibrate) navigator.vibrate(runtime.combo > 2 ? 28 : 14);
-                if (runtime.combo === 2) setImpactLabel("DOUBLE HIT!");
-                if (runtime.combo === 3) setImpactLabel("TRIPLE CRASH!");
-                if (runtime.combo >= 4) setImpactLabel(`CASTLE COMBO ×${runtime.combo}`);
-              }
-            }
-            ball.trail.unshift({ x: ball.x, y: ball.y, life: 1 });
-            if (ball.trail.length > 9) ball.trail.pop();
-            ball.trail.forEach((point) => { point.life -= 0.12 * tick; });
-            if (ball.x < -70 || ball.x > WORLD_W + 70 || ball.y < -100 || ball.y > WORLD_H + 80 || ball.age > 7) {
-              ball.active = false;
-              runtime.ball = null;
-              noShotTimer = now;
-            }
-          }
+        const hit = runtime.bricks
+          .filter((brick) => brick.attached)
+          .find((brick) => Math.abs(ball.x - brick.x) < brick.w / 2 + ball.radius && Math.abs(ball.y - brick.y) < brick.h / 2 + ball.radius);
+        if (hit) blastAt(hit.x, hit.y);
+        else if (ball.y < 160 || ball.x < -40 || ball.x > WORLD_W + 40 || ball.age > 4.5) {
+          runtime.ball = null;
+          runtime.shotCooldown = 0.28;
+          if (runtime.shots === 0) runtime.outTimer = 1.5;
         }
+      }
 
-        let changed = false;
-        for (const block of runtime.blocks) {
-          if (!block.cleared && (block.y > PLATFORM_Y + 95 || block.x < 25 || block.x > WORLD_W - 25)) {
-            block.cleared = true;
-            spawnImpact(runtime, Math.max(18, Math.min(WORLD_W - 18, block.x)), Math.min(WORLD_H - 50, block.y), "#ffe372", 14);
-            changed = true;
-          }
+      for (const particle of runtime.particles) {
+        particle.x += particle.vx * dt;
+        particle.y += particle.vy * dt;
+        particle.z += particle.vz * dt;
+        particle.vy += 0.12 * dt;
+        particle.vz *= Math.pow(0.98, dt);
+        particle.life -= 0.027 * dt;
+      }
+      runtime.particles = runtime.particles.filter((particle) => particle.life > 0);
+      for (const wave of runtime.shockwaves) {
+        wave.radius += 9.5 * dt;
+        wave.life -= 0.055 * dt;
+      }
+      runtime.shockwaves = runtime.shockwaves.filter((wave) => wave.life > 0);
+
+      if (runtime.victoryTimer > 0) {
+        runtime.victoryTimer -= 0.0167 * dt;
+        if (runtime.victoryTimer <= 0) {
+          setEndState("victory");
+          playTone(523, 0.24, "triangle", 0.06);
+          window.setTimeout(() => playTone(659, 0.3, "triangle", 0.055), 120);
+          window.setTimeout(() => playTone(784, 0.42, "triangle", 0.05), 250);
         }
-
-        if (changed) {
-          const activeCount = runtime.blocks.filter((block) => !block.cleared).length;
-          setRemaining(activeCount);
-          playTone(480, 0.12, "triangle", 0.045);
-          window.setTimeout(() => setImpactLabel(""), 850);
-          if (activeCount === 0) {
-            runtime.ended = true;
-            window.setTimeout(() => {
-              setEndState("victory");
-              playTone(523, 0.25, "triangle", 0.06);
-              window.setTimeout(() => playTone(659, 0.25, "triangle", 0.055), 140);
-              window.setTimeout(() => playTone(784, 0.4, "triangle", 0.05), 280);
-            }, 800);
-          }
-        }
-
-        if (!runtime.ball && runtime.shots === 0 && !runtime.ended && noShotTimer && now - noShotTimer > 2200) {
-          runtime.ended = true;
+      }
+      if (runtime.outTimer > 0 && runtime.victoryTimer <= 0) {
+        runtime.outTimer -= 0.0167 * dt;
+        if (runtime.outTimer <= 0 && !runtime.locked) {
+          runtime.locked = true;
           setEndState("out");
         }
       }
 
-      for (const particle of runtime.particles) {
-        particle.vy += 0.1 * dt;
-        particle.x += particle.vx * dt;
-        particle.y += particle.vy * dt;
-        particle.life -= 0.025 * dt;
-      }
-      runtime.particles = runtime.particles.filter((particle) => particle.life > 0);
-
       ctx.clearRect(0, 0, WORLD_W, WORLD_H);
-      const shade = ctx.createLinearGradient(0, 180, 0, 730);
-      shade.addColorStop(0, "rgba(20, 92, 174, 0.02)");
-      shade.addColorStop(0.7, "rgba(255, 195, 76, 0.03)");
-      shade.addColorStop(1, "rgba(27, 35, 72, 0.22)");
-      ctx.fillStyle = shade;
-      ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+      const shakeX = (Math.random() - 0.5) * runtime.shake;
+      const shakeY = (Math.random() - 0.5) * runtime.shake;
+      const cameraScale = 1 + runtime.punch * 0.025;
+      ctx.save();
+      ctx.translate(WORLD_W / 2 + shakeX, WORLD_H / 2 + shakeY);
+      ctx.scale(cameraScale, cameraScale);
+      ctx.translate(-WORLD_W / 2, -WORLD_H / 2);
 
-      drawPlatform(ctx);
-      for (const block of runtime.blocks) {
-        if (!block.cleared) drawBlock(ctx, block);
+      const stageLight = ctx.createRadialGradient(215, 360, 30, 215, 420, 280);
+      stageLight.addColorStop(0, "rgba(255, 242, 175, .18)");
+      stageLight.addColorStop(1, "rgba(25, 43, 81, .08)");
+      ctx.fillStyle = stageLight;
+      ctx.fillRect(0, 120, WORLD_W, 520);
+
+      drawBase(ctx);
+      drawCastleBacking(ctx);
+      for (const crater of runtime.craters) {
+        const craterGradient = ctx.createRadialGradient(crater.x, crater.y, 3, crater.x, crater.y, crater.radius);
+        craterGradient.addColorStop(0, `rgba(16, 23, 39, ${crater.alpha})`);
+        craterGradient.addColorStop(0.55, `rgba(31, 37, 51, ${crater.alpha * 0.7})`);
+        craterGradient.addColorStop(1, "rgba(31, 37, 51, 0)");
+        ctx.fillStyle = craterGradient;
+        ctx.beginPath();
+        ctx.arc(crater.x, crater.y, crater.radius, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      if (runtime.aiming && !runtime.ball && runtime.shots > 0) {
-        const shooterX = 215;
-        const shooterY = 668;
-        const dx = runtime.aimX - shooterX;
-        const dy = Math.min(-50, runtime.aimY - shooterY);
-        const length = Math.max(1, Math.hypot(dx, dy));
-        const nx = dx / length;
-        const ny = dy / length;
-        for (let i = 1; i <= 8; i += 1) {
-          const distance = 30 + i * 27;
-          ctx.globalAlpha = 0.95 - i * 0.08;
-          ctx.fillStyle = i < 5 ? "#fff7ca" : "#ffffff";
-          ctx.beginPath();
-          ctx.arc(shooterX + nx * distance, shooterY + ny * distance, Math.max(2.5, 6 - i * 0.35), 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
-      }
+      const flying = runtime.bricks.filter((brick) => !brick.attached && !brick.cleared).sort((a, b) => b.z - a.z);
+      flying.forEach((brick) => drawBrick(ctx, brick));
+      runtime.bricks.filter((brick) => brick.attached).forEach((brick) => drawBrick(ctx, brick));
 
-      if (runtime.ball?.active) {
-        runtime.ball.trail.forEach((point, index) => {
-          ctx.globalAlpha = Math.max(0, point.life) * (0.5 - index * 0.035);
-          drawBall(ctx, point.x, point.y, Math.max(3, runtime.ball!.radius - index * 1.4));
-        });
-        ctx.globalAlpha = 1;
-        drawBall(ctx, runtime.ball.x, runtime.ball.y, runtime.ball.radius, true);
-      } else if (runtime.shots > 0 && !runtime.ended) {
-        drawBall(ctx, 215, 668, runtime.aiming ? 21 : 24, runtime.aiming);
+      for (const wave of runtime.shockwaves) {
+        ctx.save();
+        ctx.globalAlpha = wave.life;
+        ctx.strokeStyle = "#fff4ac";
+        ctx.lineWidth = 8 * wave.life;
+        ctx.shadowColor = "#ffb62f";
+        ctx.shadowBlur = 20;
+        ctx.beginPath();
+        ctx.arc(wave.x, wave.y, wave.radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
 
       for (const particle of runtime.particles) {
+        const scale = 500 / (500 + particle.z);
+        const x = VANISH_X + (particle.x - VANISH_X) * scale;
+        const y = VANISH_Y + (particle.y - VANISH_Y) * scale;
         ctx.save();
         ctx.globalAlpha = Math.min(1, particle.life);
-        ctx.translate(particle.x, particle.y);
-        ctx.rotate(particle.vx * 0.3);
+        ctx.translate(x, y);
         ctx.fillStyle = particle.color;
-        if (particle.shape === "spark") {
-          ctx.fillRect(-particle.size / 2, -particle.size * 1.6, particle.size, particle.size * 3.2);
+        if (particle.spark) {
+          ctx.rotate(Math.atan2(particle.vy, particle.vx));
+          ctx.fillRect(-particle.size * 2, -particle.size / 2, particle.size * 4, particle.size);
         } else {
           ctx.beginPath();
-          ctx.arc(0, 0, particle.size, 0, Math.PI * 2);
+          ctx.arc(0, 0, particle.size * scale, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
       }
 
-      frame = requestAnimationFrame(render);
+      if (runtime.aiming && !runtime.ball && runtime.shots > 0 && !runtime.locked) {
+        const dx = runtime.aimX - 215;
+        const dy = Math.min(-50, runtime.aimY - 686);
+        const length = Math.max(1, Math.hypot(dx, dy));
+        for (let i = 1; i <= 10; i += 1) {
+          const distance = 28 + i * 28;
+          ctx.globalAlpha = 0.98 - i * 0.075;
+          ctx.fillStyle = i < 6 ? "#fff2a4" : "#fff";
+          ctx.beginPath();
+          ctx.arc(215 + dx / length * distance, 686 + dy / length * distance, Math.max(2.5, 6.5 - i * 0.36), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      if (runtime.ball) {
+        runtime.ball.trail.forEach((point, index) => {
+          ctx.globalAlpha = Math.max(0, point.life) * (0.5 - index * 0.025);
+          drawBall(ctx, point.x, point.y, Math.max(4, runtime.ball!.radius - index * 0.85));
+        });
+        ctx.globalAlpha = 1;
+        drawBall(ctx, runtime.ball.x, runtime.ball.y, runtime.ball.radius, true);
+      } else if (runtime.shots > 0 && !runtime.locked) {
+        drawBall(ctx, 215, 686, runtime.aiming ? 22 : 26, runtime.aiming);
+      }
+      ctx.restore();
+
+      raf = requestAnimationFrame(frame);
     };
 
-    frame = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(frame);
-  }, [playTone]);
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [blastAt, playTone]);
 
   const canvasPoint = (event: PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / rect.width) * WORLD_W,
-      y: ((event.clientY - rect.top) / rect.height) * WORLD_H,
+      x: (event.clientX - rect.left) / rect.width * WORLD_W,
+      y: (event.clientY - rect.top) / rect.height * WORLD_H,
     };
   };
 
   const beginAim = (event: PointerEvent<HTMLCanvasElement>) => {
     const runtime = runtimeRef.current;
-    if (runtime.ball || runtime.shots <= 0 || runtime.ended) return;
+    if (runtime.ball || runtime.shotCooldown > 0 || runtime.shots <= 0 || runtime.locked) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = canvasPoint(event);
     runtime.aiming = true;
     runtime.aimX = point.x;
-    runtime.aimY = Math.min(point.y, 610);
-    setShowTutorial(false);
+    runtime.aimY = Math.min(620, point.y);
+    setTutorial(false);
   };
 
   const moveAim = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -552,36 +691,22 @@ export default function Home() {
     if (!runtime.aiming) return;
     const point = canvasPoint(event);
     runtime.aimX = point.x;
-    runtime.aimY = Math.min(point.y, 610);
+    runtime.aimY = Math.min(620, point.y);
   };
 
   const fire = (event: PointerEvent<HTMLCanvasElement>) => {
     const runtime = runtimeRef.current;
-    if (!runtime.aiming || runtime.ball || runtime.shots <= 0 || runtime.ended) return;
+    if (!runtime.aiming || runtime.ball || runtime.shotCooldown > 0 || runtime.shots <= 0 || runtime.locked) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    const shooterX = 215;
-    const shooterY = 668;
-    const dx = runtime.aimX - shooterX;
-    const dy = Math.min(-60, runtime.aimY - shooterY);
+    const dx = runtime.aimX - 215;
+    const dy = Math.min(-62, runtime.aimY - 686);
     const length = Math.max(1, Math.hypot(dx, dy));
-    const speed = 13.5;
-    runtime.ball = {
-      x: shooterX,
-      y: shooterY,
-      vx: (dx / length) * speed,
-      vy: (dy / length) * speed,
-      radius: 17,
-      active: true,
-      age: 0,
-      trail: [],
-    };
-    runtime.shots -= 1;
+    runtime.ball = { x: 215, y: 686, vx: dx / length * 16.2, vy: dy / length * 16.2, radius: 18, age: 0, trail: [] };
     runtime.aiming = false;
-    runtime.physicsLive = true;
-    runtime.combo = 0;
+    runtime.shots -= 1;
     setShots(runtime.shots);
-    playTone(122, 0.12, "sawtooth", 0.055);
-    if (navigator.vibrate) navigator.vibrate(22);
+    playTone(135, 0.13, "sawtooth", 0.065);
+    if (navigator.vibrate) navigator.vibrate(24);
   };
 
   const toggleSound = () => {
@@ -595,26 +720,18 @@ export default function Home() {
     <main className="stage-wrap">
       <section className="game-shell" aria-label="Castle Knockout playable demo">
         <div className="scene-light" aria-hidden="true" />
-
         <header className="hud hud-top">
-          <div className="level-badge" aria-label="Level 7">
+          <div className="level-badge" aria-label="Level 12">
             <span>LEVEL</span>
-            <strong>7</strong>
+            <strong>12</strong>
           </div>
-          <div className="mission-card" aria-live="polite">
-            <span className="mission-crown">♛</span>
-            <div>
-              <small>KNOCK OUT</small>
-              <strong>{remaining} BLOCKS</strong>
-            </div>
+          <div className="mission-card damage-card" aria-live="polite">
+            <div className="damage-title"><span>♛</span><small>CASTLE DAMAGE</small><strong>{damage}%</strong></div>
+            <div className="damage-track"><i style={{ width: `${damage}%` }} /></div>
           </div>
           <div className="hud-actions">
-            <button className="round-button" type="button" onClick={toggleSound} aria-label={soundOn ? "Mute sound" : "Turn sound on"}>
-              {soundOn ? "♪" : "×"}
-            </button>
-            <button className="round-button restart-icon" type="button" onClick={resetGame} aria-label="Restart level">
-              ↻
-            </button>
+            <button className="round-button" type="button" onClick={toggleSound} aria-label={soundOn ? "Mute sound" : "Turn sound on"}>{soundOn ? "♪" : "×"}</button>
+            <button className="round-button restart-icon" type="button" onClick={resetGame} aria-label="Restart level">↻</button>
           </div>
         </header>
 
@@ -627,25 +744,22 @@ export default function Home() {
           onPointerMove={moveAim}
           onPointerUp={fire}
           onPointerCancel={fire}
-          aria-label="Drag upward to aim the royal ball, then release to fire"
+          aria-label="Drag to aim at the castle wall, then release to fire"
         />
 
-        {showTutorial && (
+        {tutorial && (
           <div className="tutorial" role="status">
             <span className="gesture-hand">☝</span>
-            <strong>DRAG TO AIM</strong>
-            <small>Release to fire</small>
+            <strong>AIM AT THE WALL</strong>
+            <small>Release to blast bricks into the distance</small>
           </div>
         )}
-
         {impactLabel && <div className="impact-label" aria-live="polite">{impactLabel}</div>}
 
         <footer className="hud shots-hud" aria-label={`${shots} shots remaining`}>
           <span>SHOTS</span>
           <div className="shot-dots">
-            {Array.from({ length: 5 }, (_, index) => (
-              <i key={index} className={index < shots ? "shot active" : "shot"} aria-hidden="true" />
-            ))}
+            {Array.from({ length: SHOT_COUNT }, (_, index) => <i key={index} className={index < shots ? "shot active" : "shot"} aria-hidden="true" />)}
           </div>
           <strong>{shots}</strong>
         </footer>
@@ -653,32 +767,21 @@ export default function Home() {
         {endState && (
           <div className="end-overlay" role="dialog" aria-modal="true" aria-labelledby="end-title">
             <div className="confetti" aria-hidden="true">
-              {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ "--i": index } as React.CSSProperties} />)}
+              {Array.from({ length: 20 }, (_, index) => <i key={index} style={{ "--i": index } as React.CSSProperties} />)}
             </div>
             <div className="end-card">
               <div className="end-crown" aria-hidden="true">♛</div>
-              <p className="eyebrow">CASTLE TRIAL COMPLETE</p>
-              <h1 id="end-title">{endState === "victory" ? "ROYAL VICTORY!" : "SO CLOSE, HERO!"}</h1>
-              <p>
-                {endState === "victory"
-                  ? "One perfect shot can bring down a kingdom. The full adventure is waiting."
-                  : "Every castle has a weak point. Try again—or continue the siege in the full game."}
-              </p>
-              <div className="reward-row">
-                <span>♛</span>
-                <strong>{endState === "victory" ? "+300" : "+80"}</strong>
-                <small>ROYAL COINS</small>
-              </div>
-              <a className="download-button" href={DOWNLOAD_URL} target="_blank" rel="noreferrer">
-                <span>DOWNLOAD</span>
-                <small>CONTINUE ON TAPTAP</small>
-              </a>
+              <p className="eyebrow">CASTLE BREACH COMPLETE</p>
+              <h1 id="end-title">{endState === "victory" ? "WALL DESTROYED!" : "THE WALL HOLDS!"}</h1>
+              <p>{endState === "victory" ? "The royal cannon sent every last brick flying. A bigger siege awaits in the full adventure." : "Find the weak points and fire again—or continue the siege in the full game."}</p>
+              <div className="reward-row"><span>♛</span><strong>{endState === "victory" ? "+500" : "+120"}</strong><small>ROYAL COINS</small></div>
+              <a className="download-button" href={DOWNLOAD_URL} target="_blank" rel="noreferrer"><span>DOWNLOAD</span><small>CONTINUE ON TAPTAP</small></a>
               <button className="try-again" type="button" onClick={resetGame}>↻ PLAY AGAIN</button>
             </div>
           </div>
         )}
       </section>
-      <p className="desktop-caption">CASTLE KNOCKOUT · PLAYABLE H5 DEMO</p>
+      <p className="desktop-caption">CASTLE KNOCKOUT · DEPTH-BLAST H5 DEMO</p>
     </main>
   );
 }

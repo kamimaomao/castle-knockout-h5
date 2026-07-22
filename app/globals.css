@@ -81,7 +81,7 @@ canvas:focus-visible {
     linear-gradient(180deg, rgba(26, 123, 220, 0.01) 0%, rgba(25, 46, 90, 0.06) 70%, rgba(16, 23, 55, 0.3) 100%),
     url("/castle-arena.png");
   background-position: center;
-  background-size: cover;
+  background-size: auto 108%;
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.52), inset 0 0 0 1px rgba(255,255,255,.18);
   user-select: none;
   touch-action: none;
@@ -116,7 +116,7 @@ canvas:focus-visible {
   right: 14px;
   left: 14px;
   display: grid;
-  grid-template-columns: 68px 1fr 68px;
+  grid-template-columns: 68px 1fr 48px;
   align-items: start;
   gap: 9px;
 }
@@ -158,6 +158,57 @@ canvas:focus-visible {
   text-shadow: 0 1px 0 rgba(255,255,255,.7);
 }
 
+.damage-card {
+  display: grid;
+  min-height: 62px;
+  align-content: center;
+  gap: 5px;
+  padding: 7px 10px 8px;
+}
+
+.damage-title {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.damage-title span {
+  color: #a75b12;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.damage-title small {
+  font-size: 9px;
+  letter-spacing: .75px;
+}
+
+.damage-title strong {
+  min-width: 34px;
+  color: #783b1a;
+  font-size: 15px;
+  text-align: right;
+}
+
+.damage-track {
+  height: 9px;
+  overflow: hidden;
+  border: 2px solid #995215;
+  border-radius: 999px;
+  background: rgba(105, 65, 29, .32);
+  box-shadow: inset 0 2px 2px rgba(72, 37, 14, .32);
+}
+
+.damage-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f1583e, #ff8a3d 58%, #fff06c);
+  box-shadow: 0 0 8px #fff06c;
+  transition: width .32s cubic-bezier(.2,.85,.25,1);
+}
+
 .mission-crown {
   font-size: 30px;
   color: #b85716;
@@ -179,15 +230,16 @@ canvas:focus-visible {
 
 .hud-actions {
   display: grid;
-  grid-template-columns: repeat(2, 31px);
-  gap: 5px;
+  grid-template-columns: 44px;
+  justify-content: end;
+  gap: 7px;
   pointer-events: auto;
 }
 
 .round-button {
   display: grid;
-  width: 31px;
-  height: 31px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   place-content: center;
   color: #fff;
@@ -196,7 +248,7 @@ canvas:focus-visible {
   background: linear-gradient(#74c6ff, #2879cf);
   box-shadow: 0 3px 0 #184c8a, inset 0 2px 0 rgba(255,255,255,.58);
   cursor: pointer;
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 900;
   text-shadow: 0 1px 0 #17477e;
 }
@@ -207,16 +259,16 @@ canvas:focus-visible {
 }
 
 .restart-icon {
-  font-size: 20px;
+  font-size: 24px;
 }
 
 .tutorial {
   position: absolute;
   z-index: 6;
-  bottom: 91px;
+  bottom: 92px;
   left: 50%;
   display: grid;
-  width: 180px;
+  width: 270px;
   justify-items: center;
   transform: translateX(-50%);
   color: #fff;
@@ -276,7 +328,7 @@ canvas:focus-visible {
   bottom: max(15px, env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: auto 1fr auto;
-  width: 206px;
+  width: 254px;
   min-height: 43px;
   align-items: center;
   gap: 9px;
