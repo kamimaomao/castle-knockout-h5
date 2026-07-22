@@ -32,7 +32,7 @@ test("server-renders the Castle Knockout playable surface", async () => {
   assert.match(html, /<title>Castle Knockout — Playable H5 Demo<\/title>/i);
   assert.match(html, /aria-label="Castle Knockout playable demo"/i);
   assert.match(html, /<canvas[^>]*width="430"[^>]*height="760"/i);
-  assert.match(html, /DRAG TO AIM/i);
+  assert.match(html, /PRESS &amp; HOLD/i);
   assert.match(html, /7 shots remaining/i);
   assert.match(html, /og:image[^>]*content="http:\/\/localhost:3000\/og\.png"/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
@@ -46,9 +46,13 @@ test("ships the gameplay, CTA, and original art assets", async () => {
   ]);
 
   assert.match(page, /https:\/\/www\.taptap\.cn\/moment\/791302421241397589/);
-  assert.match(page, /onPointerDown=\{beginAim\}/);
-  assert.match(page, /onPointerUp=\{fire\}/);
-  assert.match(page, /BRICKSTORM/);
+  assert.match(page, /onPointerDown=\{beginCharge\}/);
+  assert.match(page, /onPointerUp=\{releaseCharge\}/);
+  assert.doesNotMatch(page, /onPointerMove|aimX|aimY/);
+  assert.match(page, /chargeStarted/);
+  assert.match(page, /Math\.sin\(Math\.PI \* ball\.progress\)/);
+  assert.match(page, /515 - power \* 275/);
+  assert.match(page, /DEPTH HIT/);
   assert.match(page, /TOTAL BREACH!/);
   assert.match(page, /brick\.z \+= brick\.vz/);
   assert.match(page, /500 \/ \(500 \+ brick\.z\)/);

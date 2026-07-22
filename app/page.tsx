@@ -37,11 +37,13 @@ type Brick = {
 type Ball = {
   x: number;
   y: number;
-  vx: number;
-  vy: number;
+  groundY: number;
   radius: number;
-  age: number;
-  trail: { x: number; y: number; life: number }[];
+  progress: number;
+  duration: number;
+  power: number;
+  impactY: number;
+  trail: { x: number; y: number; radius: number; life: number }[];
 };
 
 type Particle = {
@@ -71,9 +73,10 @@ type Runtime = {
   particles: Particle[];
   shockwaves: Shockwave[];
   craters: { x: number; y: number; radius: number; alpha: number }[];
-  aiming: boolean;
-  aimX: number;
-  aimY: number;
+  charging: boolean;
+  chargeStarted: number;
+  charge: number;
+  chargeCuePlayed: boolean;
   shots: number;
   shotCooldown: number;
   shake: number;
@@ -151,9 +154,10 @@ function createRuntime(): Runtime {
     particles: [],
     shockwaves: [],
     craters: [],
-    aiming: false,
-    aimX: 215,
-    aimY: 360,
+    charging: false,
+    chargeStarted: 0,
+    charge: 0,
+    chargeCuePlayed: false,
     shots: SHOT_COUNT,
     shotCooldown: 0,
     shake: 0,
@@ -430,7 +434,7 @@ export default function Home() {
     setEndState(null);
   }, []);
 
-  const blastAt = useCallback((hitX: number, hitY: number) => {
+  const blastAt = useCallback((hitX: number, hitY: number, power: number) => {
     const runtime = runtimeRef.current;
     const candidates = runtime.bricks
       .filter((brick) => brick.attached && !brick.cleared)
@@ -439,11 +443,11 @@ export default function Home() {
     if (!candidates.length) return;
 
     runtime.impactCount += 1;
-    const take = Math.min(candidates.length, 19 + (runtime.impactCount % 3) * 2);
+    const take = Math.min(candidates.length, 12 + Math.round(power * 14));
     const selected = candidates.slice(0, take);
     const furthest = Math.max(70, selected[selected.length - 1]?.distance ?? 70);
     for (const { brick, distance } of selected) {
-      detachBrick(brick, hitX, hitY, Math.max(0.2, 1 - distance / (furthest + 18)));
+      detachBrick(brick, hitX, hitY, Math.max(0.2, (1 - distance / (furthest + 18)) * (0.7 + power * 0.55)));
     }
     for (const { brick, distance } of candidates.slice(take)) {
       if (distance < furthest + 58) {
@@ -454,8 +458,8 @@ export default function Home() {
 
     runtime.craters.push({ x: hitX, y: hitY, radius: 38 + take * 0.55, alpha: 0.55 });
     runtime.shockwaves.push({ x: hitX, y: hitY, radius: 8, life: 1 });
-    runtime.shake = 15;
-    runtime.punch = 1;
+    runtime.shake = 8 + power * 12;
+    runtime.punch = 0.55 + power * 0.65;
     runtime.ball = null;
     runtime.shotCooldown = 0.48;
     spawnParticles(runtime, hitX, hitY, 62 + take);
@@ -463,8 +467,8 @@ export default function Home() {
     const attached = runtime.bricks.filter((brick) => brick.attached).length;
     const nextDamage = Math.min(100, Math.round((1 - attached / runtime.initialBricks) * 100));
     setDamage(nextDamage);
-    showImpact(runtime.impactCount % 3 === 0 ? `ROYAL SMASH  +${take}` : `BRICKSTORM  +${take}`);
-    playTone(86, 0.28, "sawtooth", 0.09);
+    showImpact(power > 0.82 ? `MAX Z SMASH  +${take}` : `DEPTH HIT  +${take}`);
+    playTone(72 + power * 30, 0.28, "sawtooth", 0.07 + power * 0.035);
     window.setTimeout(() => playTone(54, 0.22, "square", 0.045), 45);
     if (navigator.vibrate) navigator.vibrate([28, 24, 55]);
 
@@ -498,6 +502,14 @@ export default function Home() {
       runtime.shotCooldown = Math.max(0, runtime.shotCooldown - 0.0167 * dt);
       runtime.shake *= Math.pow(0.79, dt);
       runtime.punch *= Math.pow(0.77, dt);
+      if (runtime.charging) {
+        runtime.charge = Math.min(1, (now - runtime.chargeStarted) / 1250);
+        if (runtime.charge >= 1 && !runtime.chargeCuePlayed) {
+          runtime.chargeCuePlayed = true;
+          playTone(720, 0.12, "triangle", 0.045);
+          if (navigator.vibrate) navigator.vibrate(18);
+        }
+      }
 
       for (const brick of runtime.bricks) {
         brick.flash = Math.max(0, brick.flash - 0.025 * dt);
@@ -519,22 +531,18 @@ export default function Home() {
 
       if (runtime.ball) {
         const ball = runtime.ball;
-        ball.x += ball.vx * dt;
-        ball.y += ball.vy * dt;
-        ball.age += 0.0167 * dt;
-        ball.trail.unshift({ x: ball.x, y: ball.y, life: 1 });
+        ball.progress = Math.min(1, ball.progress + (0.0167 * dt) / ball.duration);
+        const depthEase = 1 - Math.pow(1 - ball.progress, 1.35);
+        ball.groundY = 746 + (ball.impactY - 746) * depthEase;
+        const arcHeight = Math.sin(Math.PI * ball.progress) * (105 + ball.power * 70);
+        ball.x = 215;
+        ball.y = ball.groundY - arcHeight;
+        ball.radius = 35 - ball.progress * 19;
+        ball.trail.unshift({ x: ball.x, y: ball.y, radius: ball.radius, life: 1 });
         if (ball.trail.length > 12) ball.trail.pop();
         ball.trail.forEach((point) => { point.life -= 0.11 * dt; });
 
-        const hit = runtime.bricks
-          .filter((brick) => brick.attached)
-          .find((brick) => Math.abs(ball.x - brick.x) < brick.w / 2 + ball.radius && Math.abs(ball.y - brick.y) < brick.h / 2 + ball.radius);
-        if (hit) blastAt(hit.x, hit.y);
-        else if (ball.y < 160 || ball.x < -40 || ball.x > WORLD_W + 40 || ball.age > 4.5) {
-          runtime.ball = null;
-          runtime.shotCooldown = 0.28;
-          if (runtime.shots === 0) runtime.outTimer = 1.5;
-        }
+        if (ball.progress >= 1) blastAt(215, ball.impactY, ball.power);
       }
 
       for (const particle of runtime.particles) {
@@ -633,30 +641,71 @@ export default function Home() {
         ctx.restore();
       }
 
-      if (runtime.aiming && !runtime.ball && runtime.shots > 0 && !runtime.locked) {
-        const dx = runtime.aimX - 215;
-        const dy = Math.min(-50, runtime.aimY - 686);
-        const length = Math.max(1, Math.hypot(dx, dy));
-        for (let i = 1; i <= 10; i += 1) {
-          const distance = 28 + i * 28;
-          ctx.globalAlpha = 0.98 - i * 0.075;
-          ctx.fillStyle = i < 6 ? "#fff2a4" : "#fff";
+      if (runtime.charging && !runtime.ball && runtime.shots > 0 && !runtime.locked) {
+        const targetY = 515 - runtime.charge * 275;
+        ctx.save();
+        for (let i = 1; i <= 7; i += 1) {
+          const depth = i / 7;
+          const y = 728 + (targetY - 728) * depth;
+          ctx.globalAlpha = 0.22 + depth * 0.42;
+          ctx.strokeStyle = "#fff5b5";
+          ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.arc(215 + dx / length * distance, 686 + dy / length * distance, Math.max(2.5, 6.5 - i * 0.36), 0, Math.PI * 2);
-          ctx.fill();
+          ctx.ellipse(215, y, 27 - depth * 16, 7 - depth * 4, 0, 0, Math.PI * 2);
+          ctx.stroke();
         }
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = runtime.charge > 0.82 ? "#fff16c" : "#72caff";
+        ctx.lineWidth = 5;
+        ctx.shadowColor = runtime.charge > 0.82 ? "#ffbd32" : "#248de6";
+        ctx.shadowBlur = 16;
+        ctx.beginPath();
+        ctx.ellipse(215, targetY, 34, 12, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowColor = "transparent";
+
+        roundedRect(ctx, 92, 600, 246, 38, 18);
+        ctx.fillStyle = "rgba(29, 39, 67, .88)";
+        ctx.fill();
+        ctx.strokeStyle = "#6f7890";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        roundedRect(ctx, 100, 610, 230, 18, 9);
+        ctx.fillStyle = "#202a45";
+        ctx.fill();
+        const powerGradient = ctx.createLinearGradient(100, 0, 330, 0);
+        powerGradient.addColorStop(0, "#38a8ef");
+        powerGradient.addColorStop(0.72, "#ffd64c");
+        powerGradient.addColorStop(1, "#ff623f");
+        roundedRect(ctx, 100, 610, Math.max(10, 230 * runtime.charge), 18, 9);
+        ctx.fillStyle = powerGradient;
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "900 11px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.shadowColor = "rgba(20,28,52,.8)";
+        ctx.shadowBlur = 4;
+        ctx.fillText(`Z-DEPTH POWER  ${Math.round(runtime.charge * 100)}%`, 215, 596);
+        ctx.restore();
       }
 
       if (runtime.ball) {
+        ctx.save();
+        ctx.globalAlpha = 0.24 + runtime.ball.progress * 0.18;
+        ctx.fillStyle = "#14213c";
+        ctx.beginPath();
+        ctx.ellipse(runtime.ball.x, runtime.ball.groundY + 4, runtime.ball.radius * 1.25, runtime.ball.radius * 0.38, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
         runtime.ball.trail.forEach((point, index) => {
           ctx.globalAlpha = Math.max(0, point.life) * (0.5 - index * 0.025);
-          drawBall(ctx, point.x, point.y, Math.max(4, runtime.ball!.radius - index * 0.85));
+          drawBall(ctx, point.x, point.y, Math.max(4, point.radius * 0.78));
         });
         ctx.globalAlpha = 1;
         drawBall(ctx, runtime.ball.x, runtime.ball.y, runtime.ball.radius, true);
       } else if (runtime.shots > 0 && !runtime.locked) {
-        drawBall(ctx, 215, 686, runtime.aiming ? 22 : 26, runtime.aiming);
+        drawBall(ctx, 215, 748, 35 + runtime.charge * 4, runtime.charging);
       }
       ctx.restore();
 
@@ -667,46 +716,48 @@ export default function Home() {
     return () => cancelAnimationFrame(raf);
   }, [blastAt, playTone]);
 
-  const canvasPoint = (event: PointerEvent<HTMLCanvasElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return {
-      x: (event.clientX - rect.left) / rect.width * WORLD_W,
-      y: (event.clientY - rect.top) / rect.height * WORLD_H,
-    };
-  };
-
-  const beginAim = (event: PointerEvent<HTMLCanvasElement>) => {
+  const beginCharge = (event: PointerEvent<HTMLCanvasElement>) => {
     const runtime = runtimeRef.current;
-    if (runtime.ball || runtime.shotCooldown > 0 || runtime.shots <= 0 || runtime.locked) return;
+    if (runtime.charging || runtime.ball || runtime.shotCooldown > 0 || runtime.shots <= 0 || runtime.locked) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    const point = canvasPoint(event);
-    runtime.aiming = true;
-    runtime.aimX = point.x;
-    runtime.aimY = Math.min(620, point.y);
+    runtime.charging = true;
+    runtime.chargeStarted = performance.now();
+    runtime.charge = 0;
+    runtime.chargeCuePlayed = false;
     setTutorial(false);
+    playTone(210, 0.08, "sine", 0.025);
   };
 
-  const moveAim = (event: PointerEvent<HTMLCanvasElement>) => {
+  const releaseCharge = (event: PointerEvent<HTMLCanvasElement>) => {
     const runtime = runtimeRef.current;
-    if (!runtime.aiming) return;
-    const point = canvasPoint(event);
-    runtime.aimX = point.x;
-    runtime.aimY = Math.min(620, point.y);
-  };
-
-  const fire = (event: PointerEvent<HTMLCanvasElement>) => {
-    const runtime = runtimeRef.current;
-    if (!runtime.aiming || runtime.ball || runtime.shotCooldown > 0 || runtime.shots <= 0 || runtime.locked) return;
+    if (!runtime.charging || runtime.ball || runtime.shotCooldown > 0 || runtime.shots <= 0 || runtime.locked) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    const dx = runtime.aimX - 215;
-    const dy = Math.min(-62, runtime.aimY - 686);
-    const length = Math.max(1, Math.hypot(dx, dy));
-    runtime.ball = { x: 215, y: 686, vx: dx / length * 16.2, vy: dy / length * 16.2, radius: 18, age: 0, trail: [] };
-    runtime.aiming = false;
+    const power = Math.max(0.12, runtime.charge);
+    const impactY = 515 - power * 275;
+    runtime.ball = {
+      x: 215,
+      y: 748,
+      groundY: 748,
+      radius: 35,
+      progress: 0,
+      duration: 1.12 - power * 0.32,
+      power,
+      impactY,
+      trail: [],
+    };
+    runtime.charging = false;
+    runtime.charge = 0;
     runtime.shots -= 1;
     setShots(runtime.shots);
-    playTone(135, 0.13, "sawtooth", 0.065);
-    if (navigator.vibrate) navigator.vibrate(24);
+    playTone(120 + power * 65, 0.16, "sawtooth", 0.05 + power * 0.03);
+    if (navigator.vibrate) navigator.vibrate(20);
+  };
+
+  const cancelCharge = (event: PointerEvent<HTMLCanvasElement>) => {
+    const runtime = runtimeRef.current;
+    runtime.charging = false;
+    runtime.charge = 0;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   const toggleSound = () => {
@@ -740,18 +791,17 @@ export default function Home() {
           width={WORLD_W}
           height={WORLD_H}
           className="game-canvas"
-          onPointerDown={beginAim}
-          onPointerMove={moveAim}
-          onPointerUp={fire}
-          onPointerCancel={fire}
-          aria-label="Drag to aim at the castle wall, then release to fire"
+          onPointerDown={beginCharge}
+          onPointerUp={releaseCharge}
+          onPointerCancel={cancelCharge}
+          aria-label="Press and hold to charge Z-depth power, then release to fire"
         />
 
         {tutorial && (
           <div className="tutorial" role="status">
             <span className="gesture-hand">☝</span>
-            <strong>AIM AT THE WALL</strong>
-            <small>Release to blast bricks into the distance</small>
+            <strong>PRESS &amp; HOLD</strong>
+            <small>Release to launch into the screen depth</small>
           </div>
         )}
         {impactLabel && <div className="impact-label" aria-live="polite">{impactLabel}</div>}
